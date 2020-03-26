@@ -88,7 +88,15 @@ Function Create-VM {
 
     # User input for VM name
     $vmname = Read-Host "What is the name of this VM?"
-
+    $isServer = $false
+    $isClient = $false
+    if($vmname -like "server*") {
+        $isServer = $true
+    } elseif($test -like "client*") {
+        $isClient = $true
+    } else {
+        #Nothing
+    }
     # Create Private 1 switch if it does not exist yet
     $switch = Get-VMSwitch
 
@@ -140,39 +148,48 @@ Function Create-VM {
     $VM = $VM | Set-VM @SetVMParam -Passthru
 
     # ask user if they need an additional hard drive
-    $addhdd = Read-Host "Do you need an additional 10GB hard drive? Y/N"
-    If($addhdd -eq "y")
-    {
-        $NewVHDParam = @{
-            Path = "C:\Hyper-V\VMS\$vmname-hdd2.vhdx"
+    # Only if its not a simple server of client
+    if(-not $isServer -and -not $isClient) {
+        $addhdd = Read-Host "Do you need an additional 10GB hard drive? Y/N"
+        If($addhdd -eq "y")
+        {
+            $NewVHDParam = @{
+                Path = "C:\Hyper-V\VMS\$vmname-hdd2.vhdx"
 
-            Dynamic = $true
+                Dynamic = $true
 
-            SizeBytes = 10GB
+                SizeBytes = 10GB
 
-            ErrorAction = "Stop"
+                ErrorAction = "Stop"
 
-            Verbose = $true
+                Verbose = $true
+            }
+
+            New-VHD @NewVHDParam
+
+            $AddVMHDDParam = @{
+                Path = "C:\Hyper-V\VMS\$vmname-hdd2.vhdx"
+
+                ControllerType = "SCSI"
+
+                ControllerLocation = 1
+            }
+
+            $VM | Add-VMHardDiskDrive @AddVMHDDParam
+
+
         }
-
-        New-VHD @NewVHDParam
-
-        $AddVMHDDParam = @{
-            Path = "C:\Hyper-V\VMS\$vmname-hdd2.vhdx"
-
-            ControllerType = "SCSI"
-
-            ControllerLocation = 1
-        }
-
-        $VM | Add-VMHardDiskDrive @AddVMHDDParam
-
-
     }
 
     # Branch to decide which OS to install
     # ISO path may need to be updated for different machines
-    $os = Read-Host "Which OS would you like to load (2016/w10)?"
+    if($isServer) {
+        $os = "2016"
+    } elseif($isClient) {
+        $os = "w10"
+    } else {
+        $os = Read-Host "Which OS would you like to load (2016/w10)?"
+    }
     if($os -eq "2016")
     {
         $VMDVDParam = @{
@@ -238,7 +255,16 @@ Function Inital-Config {
 
     # Restart
     Write-Host "Restarting Machine"
-    Start-Sleep 3
+    #Write-Host "Adding Task"
+    #$task = Get-ScheduledTask -TaskName "MasterSetup" -ErrorAction SilentlyContinue
+    #if($task = $null) {
+    #    $action = New-ScheduledTaskAction -Action "powershell.exe" -Argument $($PSScriptRoot + "\" + "MasterSetup.ps1")
+    #    $trigger = New-ScheduledTaskTrigger -AtLogOn
+    #    Register-ScheduledTask -Action $action -Trigger $trigger -TaskName "MasterSetup" -Description "Sage's Master Setup Script"
+    #} else {
+    #    Write-Host "Master Setup Allready a task"
+    #    #Unregister-ScheduledTask -TaskName "MasterSetup"
+    #}
     Restart-Computer -Force
 }
 
@@ -247,6 +273,15 @@ Function Join-Domain {
     $domainName = Read-Host "Domain Name"
     $credential = Read-Host "Credential"
     add-computer –domainname $domainName -Credential $credential -restart –force
+}
+
+Function Unregister-MasterTask {
+    $task = Get-ScheduledTask -TaskName "MasterSetup" -ErrorAction SilentlyContinue
+    if($task = $null) {
+        # Nothing
+    } else {
+        Unregister-ScheduledTask -TaskName "MasterSetup"
+    }
 }
 
 #############################
@@ -261,6 +296,7 @@ Function DHCP-Install {
 
 # Create a new DHCP scope
 Function DHCP-Scope {
+    Write-Host "==== DHCP Scope ===="
     # TODO: IP Checks
     $scopeName = Read-Host "Scope Name"
     $startRange = Read-Host "Start Range"
@@ -276,21 +312,27 @@ Function DHCP-Scope {
 
 # Add an exclusion to a domain
 Function DHCP-Exclusion {
+    Write-Host "==== DHCP Exclusion ===="
     # TODO: IP Checks
     $scopeID = Read-Host "Scope ID"
     $startRange = Read-Host "Start Range"
     $endRange = Read-Host "End Range"
+    if($endRange.Length -eq 0) {
+        $endRange = $startRange
+    }
     Add-DhcpServerv4ExclusionRange -ScopeId $scopeID -StartRange $startRange `
     -EndRange $endRange
 }
 
 # Authorize a DHCP scope for a domain
 Function DHCP-Authorize {
+    Write-Host "==== DHCP Authorize ===="
     Add-DhcpServerInDC -DnsName $(Read-Host "Server Name")
 }
 
 # Link a scope to a failover
 Function DHCP-Failover {
+    Write-Host "==== DHCP Failover ===="
     $dhcp1 = Read-Host "Main DHCP"
     $dhcp2 = Read-Host "Partner Server"
     $scopeID = Read-Host "Scope ID"
@@ -368,7 +410,7 @@ Function ADDS-NewUser {
     $aduFirst = Read-Host "First Name"
     $aduLast = Read-Host "Last Name"
     $password = Read-Host "Password" -AsSecureString
-    $aduPath = X500-Path $(Read-Host "Path")
+    $aduPath = X500-Path $(Read-Host "Path" $true)
     $aduPrinciple = Read-Host "Email"
     $aduFull = $aduFirst + " " + $aduLast
     $aduSAM = $aduFirst.ToLower().Substring(0,1) + $aduLast.ToLower()
@@ -416,10 +458,10 @@ Function ADDS-ImportUsers {
             -SamAccountName $_.User `
             -AccountPassword $(ConvertTo-SecureString $_.Password -AsPlainText -Force) `
             -ChangePasswordAtLogon $false `
-            -Path $_.Path `
-            -UserPrincipalName $($_.User + $_.Email) `
+            -Path (X500-Path $_.Path $true) `
+            -UserPrincipalName $($_.User + "@" + $_.Email) `
             -Enabled $true 
-        Add-ADGroupMember -Members $("cn=" + $_.First + " " + $_.Last + "," + $_.Path) -Identity $_.Group
+        Add-ADGroupMember -Members $("cn=" + $_.First + " " + $_.Last + "," + (X500-Path $_.Path $true)) -Identity (X500-Path $_.Group) -ErrorAction SilentlyContinue
     }
 }
 
@@ -444,7 +486,7 @@ Function Menu-Page {
     # Pages can have page names
     $pageSelect = @{1 = "Intial Stuff"; 2 = "DHCP"; 3 = "ADDS Part 1"; 4 = "ADDS Part 2"}
     # Pages only have 6 things
-    $options = @("0","Initial Config","Create VM", "Join Domain", "", "", "Test Paths", `
+    $options = @("0","Initial Config","Create VM", "Join Domain", "Remove Task", "", "Test Paths", `
                  "Install DHCP", "DHCP Scope", "DHCP Authorize", "DHCP Exclude", "DHCP Failover", "", `
                  "ADDS Install", , "ADDS Secondary Install", "ADDS New OU", "ADDS New User", "ADDS User into Group", "ADDS Import Groups",`
                  "ADDS Import Users","ADDS U2G")
@@ -558,7 +600,8 @@ Function Menu-Page {
                 Join-Domain
                 break
             }
-            4 {        
+            4 {     
+                Unregister-MasterTask   
                 break
             }
             5 { 
