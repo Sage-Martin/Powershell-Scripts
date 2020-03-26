@@ -398,11 +398,23 @@ Function ADDS-NewOU {
 # Prompts to create a simple group
 Function ADDS-NewGroup {
     $groupName = Read-Host "Group Name"
-    $displayName = Read-Host "Display Name"
-    $groupPath = X500-Path $(Read-Host "Path")
-    New-ADGroup -Name $groupName -SamAccountName $groupName -GroupCategory Security `
-    -GroupScope Global -DisplayName $displayName`
-    -Path $groupPath
+    #$displayName = Read-Host "Display Name"
+    $groupPath = X500-Path $(Read-Host "Path" $true)
+    $globalN = $("GG_" + $groupName)
+    $dlR = $("DL_" + $groupName + "_R")
+    $dlRW = $("DL_" + $groupName + "_RW")
+    $dlF = $("DL_" + $groupName + "_F")
+    New-ADGroup -Name $globalN -SamAccountName $globalN -GroupCategory Security `
+    -GroupScope Global -Path $groupPath -DisplayName $("Global " + $groupName)
+    New-ADGRoup -Name $dlR -SamAccountName $dlR -GroupCategory Security `
+    -GroupScope DomainLocal -Path $groupPath -DisplayName $("Local " + $groupName + " Read")
+    New-ADGRoup -Name $dlRW -SamAccountName $dlRW -GroupCategory Security `
+    -GroupScope DomainLocal -Path $groupPath -DisplayName $("Local " + $groupName + " RW")
+    New-ADGRoup -Name $dlF -SamAccountName $dlF -GroupCategory Security `
+    -GroupScope DomainLocal -Path $groupPath -DisplayName $("Local " + $groupName + " Full")
+    Add-ADGroupMember -Identity $dlR -Members $globalN
+    Add-ADGroupMember -Identity $dlRW -Members $globalN
+    Add-ADGroupMember -Identity $dlF -Members $globalN
 }
 
 # Prompts to create a simple user
@@ -465,6 +477,28 @@ Function ADDS-ImportUsers {
     }
 }
 
+# Slightly Extended import CSV of Users
+# Headers: First, Last, Department, Job, Sam, UPN, Name, Display, Group, Path, Password
+Function ADDS-Ext-ImportUsers {
+    $mainpath = Read-Host "Main Path"
+    Import-Csv -Path (Read-Host "CSV PATH") | `
+    ForEach-Object {
+        New-ADUser -Name $($_.Name) `
+            -GivenName $_.First `
+            -Surname $_.Last `
+            -SamAccountName $_.Sam `
+            -AccountPassword $(ConvertTo-SecureString $_.Password -AsPlainText -Force) `
+            -ChangePasswordAtLogon $false `
+            -Path (X500-Path $($mainpath + "/" + $_.Path) $true) `
+            -UserPrincipalName $($_.UPN) `
+            -DisplayName $_.Display `
+            -Title $_.Job `
+            -Department $_.Department `
+            -Enabled $true 
+        Add-ADGroupMember -Members $("cn=" + $_.Name + "," + (X500-Path $_.Path $true)) -Identity (X500-Path $_.Group) -ErrorAction SilentlyContinue
+    }
+}
+
 # Import a CSV File that contains a User and the new group
 # Very basic, needs a headers of User and Group
 Function ADDS-ImportUsersToGroups {
@@ -489,7 +523,7 @@ Function Menu-Page {
     $options = @("0","Initial Config","Create VM", "Join Domain", "Remove Task", "", "Test Paths", `
                  "Install DHCP", "DHCP Scope", "DHCP Authorize", "DHCP Exclude", "DHCP Failover", "", `
                  "ADDS Install", , "ADDS Secondary Install", "ADDS New OU", "ADDS New User", "ADDS User into Group", "ADDS Import Groups",`
-                 "ADDS Import Users","ADDS U2G")
+                 "ADDS Import Users","ADDS U2G", "ADDS New Global + DL Groups", "ADDS EXT Users")
     $menu = 0
     $killthis = $false
     if(-not $quick) {
@@ -667,6 +701,14 @@ Function Menu-Page {
             }
             20 {
                 ADDS-ImportUsersToGroups
+                break
+            }
+            21 {
+                ADDS-NewGroup
+                break
+            }
+            22 {
+                ADDS-Ext-ImportUsers
                 break
             }
             
